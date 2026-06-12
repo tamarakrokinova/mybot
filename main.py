@@ -3,7 +3,6 @@ from fastapi.responses import Response
 from openai import OpenAI
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 import os
 import json
@@ -44,7 +43,7 @@ async def incoming_call(request: Request):
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
-        '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="auto">'
+        '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3">'
         '<Say voice="alice" language="en-US">Hello! You have reached our clinic. How can I help you?</Say>'
         "</Gather>"
         "</Response>"
@@ -61,11 +60,13 @@ async def handle_speech(request: Request):
     year = datetime.date.today().year
 
     prompt = (
-        "You are a clinic receptionist. Today is " + today + ". Year is always " + str(year) + ". "
-        "When patient gives a date and time, assume year " + str(year) + " automatically - never ask for the year. "
-        "Convert any time to 24-hour format for the BOOK line. Examples: 4pm=16:00, 7pm=19:00, 10am=10:00. "
-        "As soon as you understand a date and time, output ONLY: BOOK: YYYY-MM-DD HH:MM "
-        "No other words. No confirmation. No questions about year."
+        "You are a friendly clinic receptionist. Today is " + today + ". Year is " + str(year) + ". "
+        "Help patients book appointments. Never ask for the year. "
+        "Convert times to 24-hour format. Examples: 4pm=16:00, 7pm=19:00, 10am=10:00. "
+        "When you understand a date and time, output ONLY: BOOK: YYYY-MM-DD HH:MM "
+        "After booking is confirmed, ask: Is there anything else I can help you with? "
+        "If patient says no or goodbye, output ONLY: GOODBYE "
+        "Never interrupt. Wait for the full response."
     )
 
     conversation_history.append({"role": "user", "content": user_said})
@@ -93,12 +94,14 @@ async def handle_speech(request: Request):
             service.events().insert(calendarId="primary", body=event).execute()
             dt = datetime.datetime.strptime(date + " " + time, "%Y-%m-%d %H:%M")
             friendly_time = dt.strftime("%B %d at %I:%M %p")
-            spoken = "Perfect! Your appointment is booked for " + friendly_time + ". See you then! Goodbye!"
+            spoken = "Perfect! Your appointment is booked for " + friendly_time + ". Is there anything else I can help you with?"
             print("BOOKED:", friendly_time)
+            conversation_history.append({"role": "assistant", "content": spoken})
             xml = (
                 '<?xml version="1.0" encoding="UTF-8"?>'
                 "<Response>"
                 '<Say voice="alice" language="en-US">' + spoken + "</Say>"
+                '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather>'
                 "</Response>"
             )
             return Response(content=xml, media_type="application/xml")
@@ -106,11 +109,20 @@ async def handle_speech(request: Request):
             print("ERROR:", e)
             answer = "Sorry, I could not book the appointment. Please call back."
 
+    if "GOODBYE" in answer:
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            '<Say voice="alice" language="en-US">Thank you for calling. Have a great day! Goodbye!</Say>'
+            "</Response>"
+        )
+        return Response(content=xml, media_type="application/xml")
+
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         '<Say voice="alice" language="en-US">' + answer + "</Say>"
-        '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="auto"></Gather>'
+        '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather>'
         "</Response>"
     )
     return Response(content=xml, media_type="application/xml")
