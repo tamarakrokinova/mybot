@@ -6,6 +6,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 import os
+import json
 import uvicorn
 import datetime
 
@@ -16,14 +17,21 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 conversation_history = []
 
 def get_calendar_service():
-    creds = None
-    if os.path.exists("token.json"):
+    token_json = os.getenv("GOOGLE_TOKEN")
+    if token_json:
+        creds_data = json.loads(token_json)
+        creds = Credentials(
+            token=creds_data.get("token"),
+            refresh_token=creds_data.get("refresh_token"),
+            token_uri=creds_data.get("token_uri"),
+            client_id=creds_data.get("client_id"),
+            client_secret=creds_data.get("client_secret"),
+            scopes=creds_data.get("scopes"),
+        )
+    elif os.path.exists("token.json"):
         creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    if not creds or not creds.valid:
-        flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-        creds = flow.run_local_server(port=0)
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
+    else:
+        raise Exception("No Google credentials found")
     return build("calendar", "v3", credentials=creds)
 
 app = FastAPI()
