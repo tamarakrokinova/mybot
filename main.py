@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from openai import OpenAI
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
@@ -9,13 +9,10 @@ import json
 import uvicorn
 import datetime
 import random
-import requests
 import base64
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # Rachel - natural female voice
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 conversation_history = []
@@ -39,33 +36,26 @@ def get_calendar_service():
     return build("calendar", "v3", credentials=creds)
 
 def speak(text):
-    url = "https://api.elevenlabs.io/v1/text-to-speech/" + VOICE_ID + "/stream"
-    headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg"
-    }
-    data = {
-        "text": text,
-        "model_id": "eleven_turbo_v2",
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-    }
-    r = requests.post(url, headers=headers, json=data)
-    if r.status_code == 200:
-        audio_b64 = base64.b64encode(r.content).decode("utf-8")
+    try:
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice="nova",
+            input=text,
+        )
+        audio_b64 = base64.b64encode(response.content).decode("utf-8")
         return audio_b64
-    else:
-        print("ELEVENLABS ERROR:", r.text)
+    except Exception as e:
+        print("TTS ERROR:", e)
         return None
 
-def make_xml(text, action="/handle-speech", end=False):
+def make_xml(text, end=False):
     audio = speak(text)
     if audio and not end:
         xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"
             '<Play>data:audio/mpeg;base64,' + audio + '</Play>'
-            '<Gather input="speech" action="' + action + '" language="en-US" timeout="10" speechTimeout="3"></Gather>'
+            '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather>'
             "</Response>"
         )
     elif audio and end:
@@ -77,9 +67,9 @@ def make_xml(text, action="/handle-speech", end=False):
         )
     else:
         if end:
-            xml = '<Response><Say voice="alice">' + text + '</Say></Response>'
+            xml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">' + text + '</Say></Response>'
         else:
-            xml = '<Response><Say voice="alice">' + text + '</Say><Gather input="speech" action="' + action + '" language="en-US" timeout="10" speechTimeout="3"></Gather></Response>'
+            xml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">' + text + '</Say><Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather></Response>'
     return xml
 
 app = FastAPI()
