@@ -8,12 +8,20 @@ import os
 import json
 import uvicorn
 import datetime
+import random
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 conversation_history = []
+
+FILLERS = [
+    "Mhm, let me check that for you.",
+    "Sure, one moment.",
+    "Of course, let me look into that.",
+    "Absolutely, give me just a second.",
+]
 
 def get_calendar_service():
     token_json = os.getenv("GOOGLE_TOKEN")
@@ -59,14 +67,15 @@ async def handle_speech(request: Request):
     today = datetime.date.today().strftime("%Y-%m-%d")
     year = datetime.date.today().year
 
+    filler = random.choice(FILLERS)
+
     prompt = (
         "You are a friendly clinic receptionist. Today is " + today + ". Year is " + str(year) + ". "
         "Help patients book appointments. Never ask for the year. "
         "Convert times to 24-hour format. Examples: 4pm=16:00, 7pm=19:00, 10am=10:00. "
         "When you understand a date and time, output ONLY: BOOK: YYYY-MM-DD HH:MM "
         "After booking is confirmed, ask: Is there anything else I can help you with? "
-        "If patient says no or goodbye, output ONLY: GOODBYE "
-        "Never interrupt. Wait for the full response."
+        "If patient says no or goodbye or thank you, output ONLY: GOODBYE"
     )
 
     conversation_history.append({"role": "user", "content": user_said})
@@ -100,6 +109,7 @@ async def handle_speech(request: Request):
             xml = (
                 '<?xml version="1.0" encoding="UTF-8"?>'
                 "<Response>"
+                '<Say voice="alice" language="en-US">' + filler + "</Say>"
                 '<Say voice="alice" language="en-US">' + spoken + "</Say>"
                 '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather>'
                 "</Response>"
@@ -121,6 +131,7 @@ async def handle_speech(request: Request):
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
+        '<Say voice="alice" language="en-US">' + filler + "</Say>"
         '<Say voice="alice" language="en-US">' + answer + "</Say>"
         '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather>'
         "</Response>"
