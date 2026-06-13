@@ -52,7 +52,7 @@ async def incoming_call(request: Request):
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3">'
-        '<Say voice="alice" language="en-US">Hello! You have reached our clinic. How can I help you?</Say>'
+        '<Say voice="alice" language="en-US">Hello! Thank you for calling Union Recording Studio. How can I help you today?</Say>'
         "</Gather>"
         "</Response>"
     )
@@ -70,12 +70,17 @@ async def handle_speech(request: Request):
     filler = random.choice(FILLERS)
 
     prompt = (
-        "You are a friendly clinic receptionist. Today is " + today + ". Year is " + str(year) + ". "
-        "Help patients book appointments. Never ask for the year. "
+        "You are a friendly receptionist at Union Recording Studio. "
+        "The studio has two locations: Rampart and Santa Monica. "
+        "Today is " + today + ". Year is " + str(year) + ". "
+        "Help clients book recording sessions. "
+        "Ask which location they prefer if they don't say. "
+        "Never ask for the year. "
         "Convert times to 24-hour format. Examples: 4pm=16:00, 7pm=19:00, 10am=10:00. "
-        "When you understand a date and time, output ONLY: BOOK: YYYY-MM-DD HH:MM "
-        "After booking is confirmed, ask: Is there anything else I can help you with? "
-        "If patient says no or goodbye or thank you, output ONLY: GOODBYE"
+        "When you have location, date and time, output ONLY: BOOK: LOCATION YYYY-MM-DD HH:MM "
+        "Example: BOOK: Santa Monica 2026-06-13 14:00 "
+        "After booking, ask: Is there anything else I can help you with? "
+        "If client says no or goodbye or thank you, output ONLY: GOODBYE"
     )
 
     conversation_history.append({"role": "user", "content": user_said})
@@ -91,20 +96,28 @@ async def handle_speech(request: Request):
 
     if "BOOK:" in answer:
         try:
-            book_part = answer.split("BOOK:")[1].strip().split()
-            date = book_part[0]
-            time = book_part[1]
+            book_part = answer.split("BOOK:")[1].strip()
+            parts = book_part.split()
+            if len(parts) >= 3:
+                location = parts[0] + " " + parts[1] if parts[1] in ["Monica", "Rampart"] else parts[0]
+                date = parts[-2]
+                time = parts[-1]
+            else:
+                location = "Studio"
+                date = parts[0]
+                time = parts[1]
+
             service = get_calendar_service()
             event = {
-                "summary": "Clinic Appointment",
+                "summary": "Recording Session - " + location,
                 "start": {"dateTime": date + "T" + time + ":00", "timeZone": "America/Los_Angeles"},
                 "end": {"dateTime": date + "T" + time + ":00", "timeZone": "America/Los_Angeles"},
             }
             service.events().insert(calendarId="primary", body=event).execute()
             dt = datetime.datetime.strptime(date + " " + time, "%Y-%m-%d %H:%M")
             friendly_time = dt.strftime("%B %d at %I:%M %p")
-            spoken = "Perfect! Your appointment is booked for " + friendly_time + ". Is there anything else I can help you with?"
-            print("BOOKED:", friendly_time)
+            spoken = "Perfect! Your recording session at " + location + " is booked for " + friendly_time + ". Is there anything else I can help you with?"
+            print("BOOKED:", location, friendly_time)
             conversation_history.append({"role": "assistant", "content": spoken})
             xml = (
                 '<?xml version="1.0" encoding="UTF-8"?>'
@@ -117,13 +130,13 @@ async def handle_speech(request: Request):
             return Response(content=xml, media_type="application/xml")
         except Exception as e:
             print("ERROR:", e)
-            answer = "Sorry, I could not book the appointment. Please call back."
+            answer = "Sorry, I could not book the session. Please call back."
 
     if "GOODBYE" in answer:
         xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"
-            '<Say voice="alice" language="en-US">Thank you for calling. Have a great day! Goodbye!</Say>'
+            '<Say voice="alice" language="en-US">Thank you for calling Union Recording Studio. Have a great day! Goodbye!</Say>'
             "</Response>"
         )
         return Response(content=xml, media_type="application/xml")
