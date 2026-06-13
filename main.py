@@ -82,6 +82,10 @@ async def incoming_call(request: Request):
         return Response(content=xml_play(url), media_type="application/xml")
     return Response(content=xml_say("Hello! Thank you for calling Union Recording Studio. How can I help you?"), media_type="application/xml")
 
+@app.post("/handle-speech")
+async def handle_speech_alias(request: Request):
+    return await filler(request)
+
 @app.post("/filler")
 async def filler(request: Request):
     form = await request.form()
