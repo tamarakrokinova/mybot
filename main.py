@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
@@ -9,19 +9,16 @@ import json
 import uvicorn
 import datetime
 import random
+import requests
+import base64
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # Rachel - natural female voice
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 conversation_history = []
-
-FILLERS = [
-    "Mhm, let me check that for you.",
-    "Sure, one moment.",
-    "Of course, let me look into that.",
-    "Absolutely, give me just a second.",
-]
 
 def get_calendar_service():
     token_json = os.getenv("GOOGLE_TOKEN")
@@ -41,6 +38,50 @@ def get_calendar_service():
         raise Exception("No Google credentials found")
     return build("calendar", "v3", credentials=creds)
 
+def speak(text):
+    url = "https://api.elevenlabs.io/v1/text-to-speech/" + VOICE_ID + "/stream"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg"
+    }
+    data = {
+        "text": text,
+        "model_id": "eleven_turbo_v2",
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
+    }
+    r = requests.post(url, headers=headers, json=data)
+    if r.status_code == 200:
+        audio_b64 = base64.b64encode(r.content).decode("utf-8")
+        return audio_b64
+    else:
+        print("ELEVENLABS ERROR:", r.text)
+        return None
+
+def make_xml(text, action="/handle-speech", end=False):
+    audio = speak(text)
+    if audio and not end:
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            '<Play>data:audio/mpeg;base64,' + audio + '</Play>'
+            '<Gather input="speech" action="' + action + '" language="en-US" timeout="10" speechTimeout="3"></Gather>'
+            "</Response>"
+        )
+    elif audio and end:
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            '<Play>data:audio/mpeg;base64,' + audio + '</Play>'
+            "</Response>"
+        )
+    else:
+        if end:
+            xml = '<Response><Say voice="alice">' + text + '</Say></Response>'
+        else:
+            xml = '<Response><Say voice="alice">' + text + '</Say><Gather input="speech" action="' + action + '" language="en-US" timeout="10" speechTimeout="3"></Gather></Response>'
+    return xml
+
 app = FastAPI()
 
 @app.post("/incoming-call")
@@ -48,14 +89,7 @@ async def incoming_call(request: Request):
     global conversation_history
     conversation_history = []
     print("=== NEW CALL ===")
-    xml = (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        "<Response>"
-        '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3">'
-        '<Say voice="alice" language="en-US">Hello! Thank you for calling Union Recording Studio. How can I help you today?</Say>'
-        "</Gather>"
-        "</Response>"
-    )
+    xml = make_xml("Hello! Thank you for calling Union Recording Studio. How can I help you today?")
     return Response(content=xml, media_type="application/xml")
 
 @app.post("/handle-speech")
@@ -67,17 +101,15 @@ async def handle_speech(request: Request):
     today = datetime.date.today().strftime("%Y-%m-%d")
     year = datetime.date.today().year
 
-    filler = random.choice(FILLERS)
-
     prompt = (
         "You are a friendly receptionist at Union Recording Studio. "
         "The studio has two locations: Rampart and Santa Monica. "
         "Today is " + today + ". Year is " + str(year) + ". "
         "Help clients book recording sessions. "
-        "Ask which location they prefer if they don't say. "
+        "Ask which location they prefer if they don't mention one. "
         "Never ask for the year. "
         "Convert times to 24-hour format. Examples: 4pm=16:00, 7pm=19:00, 10am=10:00. "
-        "When you have location, date and time, output ONLY: BOOK: LOCATION YYYY-MM-DD HH:MM "
+        "When you have location, date and time, output ONLY on the first line: BOOK: LOCATION YYYY-MM-DD HH:MM "
         "Example: BOOK: Santa Monica 2026-06-13 14:00 "
         "After booking, ask: Is there anything else I can help you with? "
         "If client says no or goodbye or thank you, output ONLY: GOODBYE"
@@ -123,36 +155,18 @@ async def handle_speech(request: Request):
             spoken = "Perfect! Your recording session at " + location + " is booked for " + friendly_time + ". Is there anything else I can help you with?"
             print("BOOKED:", location, friendly_time)
             conversation_history.append({"role": "assistant", "content": spoken})
-            xml = (
-                '<?xml version="1.0" encoding="UTF-8"?>'
-                "<Response>"
-                '<Say voice="alice" language="en-US">' + filler + "</Say>"
-                '<Say voice="alice" language="en-US">' + spoken + "</Say>"
-                '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather>'
-                "</Response>"
-            )
+            xml = make_xml(spoken)
             return Response(content=xml, media_type="application/xml")
         except Exception as e:
             print("ERROR:", e)
-            answer = "Sorry, I could not book the session. Please call back."
+            xml = make_xml("Sorry, I could not book the session. Please call back.", end=True)
+            return Response(content=xml, media_type="application/xml")
 
     if "GOODBYE" in answer:
-        xml = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            "<Response>"
-            '<Say voice="alice" language="en-US">Thank you for calling Union Recording Studio. Have a great day! Goodbye!</Say>'
-            "</Response>"
-        )
+        xml = make_xml("Thank you for calling Union Recording Studio. Have a great day! Goodbye!", end=True)
         return Response(content=xml, media_type="application/xml")
 
-    xml = (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        "<Response>"
-        '<Say voice="alice" language="en-US">' + filler + "</Say>"
-        '<Say voice="alice" language="en-US">' + answer + "</Say>"
-        '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather>'
-        "</Response>"
-    )
+    xml = make_xml(answer)
     return Response(content=xml, media_type="application/xml")
 
 if __name__ == "__main__":
