@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
 from openai import OpenAI
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
@@ -8,14 +8,15 @@ import os
 import json
 import uvicorn
 import datetime
-import random
-import base64
+import uuid
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
 conversation_history = []
+os.makedirs("/tmp/audio", exist_ok=True)
 
 def get_calendar_service():
     token_json = os.getenv("GOOGLE_TOKEN")
@@ -42,27 +43,32 @@ def speak(text):
             voice="nova",
             input=text,
         )
-        audio_b64 = base64.b64encode(response.content).decode("utf-8")
-        return audio_b64
+        filename = str(uuid.uuid4()) + ".mp3"
+        filepath = "/tmp/audio/" + filename
+        with open(filepath, "wb") as f:
+            f.write(response.content)
+        url = BASE_URL + "/audio/" + filename
+        print("AUDIO URL:", url)
+        return url
     except Exception as e:
         print("TTS ERROR:", e)
         return None
 
 def make_xml(text, end=False):
-    audio = speak(text)
-    if audio and not end:
+    url = speak(text)
+    if url and not end:
         xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"
-            '<Play>data:audio/mpeg;base64,' + audio + '</Play>'
+            "<Play>" + url + "</Play>"
             '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather>'
             "</Response>"
         )
-    elif audio and end:
+    elif url and end:
         xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"
-            '<Play>data:audio/mpeg;base64,' + audio + '</Play>'
+            "<Play>" + url + "</Play>"
             "</Response>"
         )
     else:
@@ -73,6 +79,11 @@ def make_xml(text, end=False):
     return xml
 
 app = FastAPI()
+
+@app.get("/audio/{filename}")
+async def get_audio(filename: str):
+    filepath = "/tmp/audio/" + filename
+    return FileResponse(filepath, media_type="audio/mpeg")
 
 @app.post("/incoming-call")
 async def incoming_call(request: Request):
