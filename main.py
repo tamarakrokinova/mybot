@@ -3,11 +3,9 @@ import json
 import uvicorn
 import datetime
 import asyncio
-import base64
 import websockets
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import Response
-from openai import OpenAI
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -44,7 +42,7 @@ SYSTEM_PROMPT = (
     "Help clients book recording sessions. "
     "Ask which location they prefer if they don't mention one. "
     "Never ask for the year. "
-    "When you have confirmed location, date and time — say exactly: "
+    "When you have confirmed location, date and time, say exactly: "
     "BOOKING: LOCATION YYYY-MM-DD HH:MM using 24-hour time. "
     "After booking say: Your session is confirmed. Is there anything else I can help you with? "
     "If client is done, say goodbye warmly."
@@ -71,7 +69,7 @@ async def media_stream(websocket: WebSocket):
     print("=== NEW CALL ===")
 
     async with websockets.connect(
-        "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01",
+        "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
         additional_headers={
             "Authorization": "Bearer " + OPENAI_API_KEY,
             "OpenAI-Beta": "realtime=v1",
