@@ -96,16 +96,20 @@ async def handle_speech(request: Request):
 
     if "BOOK:" in answer:
         try:
-            book_part = answer.split("BOOK:")[1].strip()
-            parts = book_part.split()
-            if len(parts) >= 3:
-                location = parts[0] + " " + parts[1] if parts[1] in ["Monica", "Rampart"] else parts[0]
-                date = parts[-2]
-                time = parts[-1]
+            book_line = answer.split("BOOK:")[1].split("\n")[0].strip()
+            parts = book_line.split()
+            if len(parts) == 4:
+                location = parts[0] + " " + parts[1]
+                date = parts[2]
+                time = parts[3]
+            elif len(parts) == 3:
+                location = parts[0]
+                date = parts[1]
+                time = parts[2]
             else:
                 location = "Studio"
-                date = parts[0]
-                time = parts[1]
+                date = parts[-2]
+                time = parts[-1]
 
             service = get_calendar_service()
             event = {
