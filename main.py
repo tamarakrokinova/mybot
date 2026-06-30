@@ -1,22 +1,25 @@
+import os
+import json
+import uuid
+import uvicorn
+import datetime
+import random
 from fastapi import FastAPI, Request
 from fastapi.responses import Response, FileResponse
 from openai import OpenAI
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-import os
-import json
-import uvicorn
-import datetime
-import uuid
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 conversation_history = []
 os.makedirs("/tmp/audio", exist_ok=True)
+
+FILLERS = ["Mhm...", "Sure...", "Of course...", "Got it..."]
 
 def get_calendar_service():
     token_json = os.getenv("GOOGLE_TOKEN")
@@ -33,96 +36,86 @@ def get_calendar_service():
     elif os.path.exists("token.json"):
         creds = Credentials.from_authorized_user_file("token.json", SCOPES)
     else:
-        raise Exception("No Google credentials found")
+        raise Exception("No credentials")
     return build("calendar", "v3", credentials=creds)
 
-def speak(text):
+def tts(text):
     try:
-        response = client.audio.speech.create(
-            model="tts-1",
-            voice="nova",
-            input=text,
-        )
+        response = client.audio.speech.create(model="tts-1", voice="nova", input=text)
         filename = str(uuid.uuid4()) + ".mp3"
         filepath = "/tmp/audio/" + filename
         with open(filepath, "wb") as f:
             f.write(response.content)
-        url = BASE_URL + "/audio/" + filename
-        print("AUDIO URL:", url)
-        return url
+        return BASE_URL + "/audio/" + filename
     except Exception as e:
         print("TTS ERROR:", e)
         return None
 
-def make_xml(text, end=False):
-    url = speak(text)
-    if url and not end:
-        xml = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            "<Response>"
-            "<Play>" + url + "</Play>"
-            '<Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather>'
-            "</Response>"
-        )
-    elif url and end:
-        xml = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            "<Response>"
-            "<Play>" + url + "</Play>"
-            "</Response>"
-        )
-    else:
-        if end:
-            xml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">' + text + '</Say></Response>'
-        else:
-            xml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">' + text + '</Say><Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather></Response>'
-    return xml
+def xml_play(url, next_action="/handle-speech", end=False):
+    if end:
+        return '<?xml version="1.0" encoding="UTF-8"?><Response><Play>' + url + '</Play></Response>'
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?><Response>'
+        '<Play>' + url + '</Play>'
+        '<Gather input="speech" action="' + next_action + '" language="en-US" timeout="10" speechTimeout="3"></Gather>'
+        '</Response>'
+    )
+
+def xml_say(text, end=False):
+    if end:
+        return '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">' + text + '</Say></Response>'
+    return '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">' + text + '</Say><Gather input="speech" action="/handle-speech" language="en-US" timeout="10" speechTimeout="3"></Gather></Response>'
 
 app = FastAPI()
 
 @app.get("/audio/{filename}")
 async def get_audio(filename: str):
-    filepath = "/tmp/audio/" + filename
-    return FileResponse(filepath, media_type="audio/mpeg")
+    return FileResponse("/tmp/audio/" + filename, media_type="audio/mpeg")
 
 @app.post("/incoming-call")
 async def incoming_call(request: Request):
     global conversation_history
     conversation_history = []
     print("=== NEW CALL ===")
-    xml = make_xml("Hello! Thank you for calling Union Recording Studio. How can I help you today?")
-    return Response(content=xml, media_type="application/xml")
+    url = tts("Hello! Thank you for calling Union Recording Studio. How can I help you today?")
+    if url:
+        return Response(content=xml_play(url), media_type="application/xml")
+    return Response(content=xml_say("Hello! Thank you for calling Union Recording Studio. How can I help you?"), media_type="application/xml")
 
 @app.post("/handle-speech")
-async def handle_speech(request: Request):
-    global conversation_history
+async def handle_speech_alias(request: Request):
+    return await filler(request)
+
+@app.post("/filler")
+async def filler(request: Request):
     form = await request.form()
     user_said = form.get("SpeechResult", "")
     print("PATIENT:", user_said)
+    conversation_history.append({"role": "user", "content": user_said})
+    filler_text = random.choice(FILLERS)
+    url = tts(filler_text)
+    if url:
+        return Response(content=xml_play(url, next_action="/respond"), media_type="application/xml")
+    return Response(content=xml_say(filler_text, next_action="/respond"), media_type="application/xml")
+
+@app.post("/respond")
+async def respond(request: Request):
     today = datetime.date.today().strftime("%Y-%m-%d")
     year = datetime.date.today().year
-
     prompt = (
         "You are a friendly receptionist at Union Recording Studio. "
-        "The studio has two locations: Rampart and Santa Monica. "
+        "Locations: Rampart and Santa Monica. "
         "Today is " + today + ". Year is " + str(year) + ". "
-        "Help clients book recording sessions. "
-        "Ask which location they prefer if they don't mention one. "
-        "Never ask for the year. "
-        "Convert times to 24-hour format. Examples: 4pm=16:00, 7pm=19:00, 10am=10:00. "
-        "When you have location, date and time, output ONLY on the first line: BOOK: LOCATION YYYY-MM-DD HH:MM "
-        "Example: BOOK: Santa Monica 2026-06-13 14:00 "
-        "After booking, ask: Is there anything else I can help you with? "
-        "If client says no or goodbye or thank you, output ONLY: GOODBYE"
+        "Help clients book recording sessions. Ask location if not mentioned. Never ask year. "
+        "Convert times to 24-hour. When you have location+date+time output ONLY: BOOK: LOCATION YYYY-MM-DD HH:MM "
+        "After booking ask: Is there anything else I can help you with? "
+        "If done output ONLY: GOODBYE"
     )
-
-    conversation_history.append({"role": "user", "content": user_said})
 
     result = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "system", "content": prompt}] + conversation_history,
     )
-
     answer = result.choices[0].message.content.strip()
     print("BOT:", answer)
     conversation_history.append({"role": "assistant", "content": answer})
@@ -131,19 +124,9 @@ async def handle_speech(request: Request):
         try:
             book_line = answer.split("BOOK:")[1].split("\n")[0].strip()
             parts = book_line.split()
-            if len(parts) == 4:
-                location = parts[0] + " " + parts[1]
-                date = parts[2]
-                time = parts[3]
-            elif len(parts) == 3:
-                location = parts[0]
-                date = parts[1]
-                time = parts[2]
-            else:
-                location = "Studio"
-                date = parts[-2]
-                time = parts[-1]
-
+            location = parts[0] + " " + parts[1] if len(parts) == 4 else parts[0]
+            date = parts[-2]
+            time = parts[-1]
             service = get_calendar_service()
             event = {
                 "summary": "Recording Session - " + location,
@@ -152,23 +135,59 @@ async def handle_speech(request: Request):
             }
             service.events().insert(calendarId="primary", body=event).execute()
             dt = datetime.datetime.strptime(date + " " + time, "%Y-%m-%d %H:%M")
-            friendly_time = dt.strftime("%B %d at %I:%M %p")
-            spoken = "Perfect! Your recording session at " + location + " is booked for " + friendly_time + ". Is there anything else I can help you with?"
-            print("BOOKED:", location, friendly_time)
+            friendly = dt.strftime("%B %d at %I:%M %p")
+            spoken = "Perfect! Your session at " + location + " is booked for " + friendly + ". Is there anything else I can help you with?"
+            print("BOOKED:", location, friendly)
             conversation_history.append({"role": "assistant", "content": spoken})
-            xml = make_xml(spoken)
-            return Response(content=xml, media_type="application/xml")
+            url = tts(spoken)
+            if url:
+                return Response(content=xml_play(url), media_type="application/xml")
         except Exception as e:
             print("ERROR:", e)
-            xml = make_xml("Sorry, I could not book the session. Please call back.", end=True)
-            return Response(content=xml, media_type="application/xml")
 
     if "GOODBYE" in answer:
-        xml = make_xml("Thank you for calling Union Recording Studio. Have a great day! Goodbye!", end=True)
-        return Response(content=xml, media_type="application/xml")
+        url = tts("Thank you for calling Union Recording Studio. Have a great day! Goodbye!")
+        if url:
+            return Response(content=xml_play(url, end=True), media_type="application/xml")
+        return Response(content=xml_say("Goodbye!", end=True), media_type="application/xml")
 
-    xml = make_xml(answer)
-    return Response(content=xml, media_type="application/xml")
+    url = tts(answer)
+    if url:
+        return Response(content=xml_play(url), media_type="application/xml")
+    return Response(content=xml_say(answer), media_type="application/xml")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+@app.post("/book-appointment")
+async def book_appointment(request: Request):
+    try:
+        body = await request.json()
+        print("RETELL BOOKING:", body)
+        
+        patient_name = body.get("patient_name", "Patient")
+        date = body.get("appointment_date", "")
+        time = body.get("appointment_time", "")
+        
+        if not date or not time:
+            return {"status": "error", "message": "Missing date or time"}
+        
+        service = get_calendar_service()
+        event = {
+            "summary": "Dental Appointment - " + patient_name,
+            "start": {"dateTime": date + "T" + time + ":00", "timeZone": "America/Los_Angeles"},
+            "end": {"dateTime": date + "T" + time + ":00", "timeZone": "America/Los_Angeles"},
+        }
+        result = service.events().insert(calendarId="primary", body=event).execute()
+        print("BOOKED:", patient_name, date, time)
+        
+        return {
+            "status": "success",
+            "booking_id": result.get("id"),
+            "patient_name": patient_name,
+            "appointment_date": date,
+            "appointment_time": time
+        }
+    except Exception as e:
+        print("BOOKING ERROR:", e)
+        return {"status": "error", "message": str(e)}
