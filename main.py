@@ -209,3 +209,17 @@ async def book_appointment(request: Request):
     except Exception as e:
         print("BOOKING ERROR:", e)
         return {"status": "error", "message": str(e)}
+
+@app.post("/fetch-appointment")
+async def fetch_appointment(request: Request):
+    try:
+        body = await request.json()
+        print("FETCH APPOINTMENT:", body)
+        # For new patients or when no appointment exists
+        return {
+            "booking_found": False,
+            "message": "No existing appointment found"
+        }
+    except Exception as e:
+        print("FETCH ERROR:", e)
+        return {"booking_found": False}
