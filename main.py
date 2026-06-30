@@ -164,29 +164,47 @@ async def book_appointment(request: Request):
     try:
         body = await request.json()
         print("RETELL BOOKING:", body)
-        
-        patient_name = body.get("patient_name", "Patient")
-        date = body.get("appointment_date", "")
-        time = body.get("appointment_time", "")
-        
-        if not date or not time:
+
+        # Support both args and top-level
+        args = body.get("args", body)
+        patient_name = args.get("rider_name") or args.get("patient_name") or "Patient"
+        date = args.get("appointment_date", "")
+        time_raw = args.get("appointment_time", "")
+
+        if not date or not time_raw:
             return {"status": "error", "message": "Missing date or time"}
-        
+
+        # Convert time to 24-hour format if needed (e.g. "9:00 AM" -> "09:00")
+        import re
+        time_raw = time_raw.strip()
+        if "AM" in time_raw.upper() or "PM" in time_raw.upper():
+            import datetime as dt
+            try:
+                t = dt.datetime.strptime(time_raw.upper().replace(".", ""), "%I:%M %p")
+                time_24 = t.strftime("%H:%M")
+            except:
+                t = dt.datetime.strptime(time_raw.upper().replace(".", ""), "%I %p")
+                time_24 = t.strftime("%H:%M")
+        else:
+            time_24 = time_raw
+
         service = get_calendar_service()
         event = {
             "summary": "Dental Appointment - " + patient_name,
-            "start": {"dateTime": date + "T" + time + ":00", "timeZone": "America/Los_Angeles"},
-            "end": {"dateTime": date + "T" + time + ":00", "timeZone": "America/Los_Angeles"},
+            "start": {"dateTime": date + "T" + time_24 + ":00", "timeZone": "America/Los_Angeles"},
+            "end": {"dateTime": date + "T" + time_24 + ":00", "timeZone": "America/Los_Angeles"},
         }
         result = service.events().insert(calendarId="primary", body=event).execute()
-        print("BOOKED:", patient_name, date, time)
-        
+        print("BOOKED:", patient_name, date, time_24)
+
         return {
             "status": "success",
             "booking_id": result.get("id"),
             "patient_name": patient_name,
             "appointment_date": date,
-            "appointment_time": time
+            "appointment_time": time_24,
+            "new_appointment_date": date,
+            "new_appointment_time": time_raw
         }
     except Exception as e:
         print("BOOKING ERROR:", e)
