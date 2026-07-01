@@ -167,7 +167,7 @@ async def book_appointment(request: Request):
 
         # Support both args and top-level
         args = body.get("args", body)
-        patient_name = args.get("rider_name") or args.get("patient_name") or "Patient"
+        patient_name = args.get("rider_name") or args.get("patient_name") or args.get("caller_name") or "Patient"
         date = args.get("appointment_date", "")
         time_raw = args.get("appointment_time", "")
 
@@ -191,6 +191,7 @@ async def book_appointment(request: Request):
         service = get_calendar_service()
         event = {
             "summary": "Dental Appointment - " + patient_name,
+                "description": "Phone: " + args.get("phone_number", args.get("caller_phone", "N/A")) + "\nDate of Birth: " + args.get("date_of_birth", args.get("caller_dob", "N/A")) + "\nService: " + args.get("service_type", args.get("appointment_type", "N/A")),
             "start": {"dateTime": date + "T" + time_24 + ":00", "timeZone": "America/Los_Angeles"},
             "end": {"dateTime": date + "T" + time_24 + ":00", "timeZone": "America/Los_Angeles"},
         }
